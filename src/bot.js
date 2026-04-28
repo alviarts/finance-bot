@@ -38,17 +38,23 @@ function updateLidMap(contacts) {
 
 /**
  * Resolve JID @lid ke @s.whatsapp.net menggunakan lidMap.
- * Jika tidak ditemukan, kembalikan jid asli.
+ * Jika tidak ditemukan di lidMap, coba konversi langsung ke @s.whatsapp.net.
  */
 function resolveLidJid(jid) {
   if (!jid || !jid.endsWith('@lid')) return jid;
+
+  // Coba dari lidMap dulu
   const resolved = lidMap.get(jid);
   if (resolved) {
     console.log(`[LID] Resolved ${jid} → ${resolved}`);
     return resolved;
   }
-  console.log(`[LID] Tidak bisa resolve ${jid}, pakai apa adanya`);
-  return jid;
+
+  // Fallback: konversi numeric ID @lid → @s.whatsapp.net
+  const numericId = jid.replace('@lid', '');
+  const fallback = `${numericId}@s.whatsapp.net`;
+  console.log(`[LID] Tidak ada di lidMap, fallback ${jid} → ${fallback}`);
+  return fallback;
 }
 
 // ── Validasi env ─────────────────────────────────────────────────────────────
