@@ -106,6 +106,50 @@ async function connectToWhatsApp() {
 
   sock.ev.on('creds.update', saveCreds);
 
+  // ── Anti-flag mitigations ───────────────────────────────────────────────
+  // Tujuan: bikin reply pattern lebih mirip manusia supaya nomor ini tidak
+  // dianggap automated (bot WA gampang kena tinjauan / banned).
+  //
+  // 1) Mark read pesan masuk dulu (manusia baca pesan sebelum balas).
+  // 2) Kirim presence "composing" → user lihat indikator "typing..." di chat.
+  // 3) Random delay 1-3 detik (mimic kecepatan ngetik manusia).
+  // 4) Rate limit: minimal 1 detik antar reply per user; spam diserialisasi.
+  // 5) Hindari online 24/7 — set markOnlineOnConnect=false (sudah di atas).
+
+  const sleep         = ms => new Promise(r => setTimeout(r, ms));
+  const randInt       = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+  const lastReplyAt   = new Map();        // jid → timestamp ms
+  const userQueue     = new Map();        // jid → Promise (serialize per user)
+  const MIN_GAP_MS    = 1000;             // minimum gap antar reply per user
+  const TYPING_MIN_MS = 1000;             // delay min sebelum kirim
+  const TYPING_MAX_MS = 3000;             // delay max sebelum kirim
+
+  /**
+   * Antri eksekusi handler per user supaya gak ada race-condition kalau
+   * user spam ngirim banyak pesan sekaligus.
+   */
+  function enqueue(jid, fn) {
+    const prev = userQueue.get(jid) || Promise.resolve();
+    const next = prev.catch(() => {}).then(fn);
+    userQueue.set(jid, next);
+    return next;
+  }
+
+  async function humanDelay(jid) {
+    // Pastikan minimal 1 detik sejak reply terakhir ke user yang sama.
+    const last = lastReplyAt.get(jid) || 0;
+    const sinceLast = Date.now() - last;
+    if (sinceLast < MIN_GAP_MS) {
+      await sleep(MIN_GAP_MS - sinceLast);
+    }
+    // Tambah random "typing" delay.
+    const typingMs = randInt(TYPING_MIN_MS, TYPING_MAX_MS);
+    try { await sock.sendPresenceUpdate('composing', jid); } catch (_) {}
+    await sleep(typingMs);
+    try { await sock.sendPresenceUpdate('paused', jid); } catch (_) {}
+    lastReplyAt.set(jid, Date.now());
+  }
+
   // ── Pesan masuk ──────────────────────────────────────────────────────────
   sock.ev.on('messages.upsert', async ({ messages }) => {
     for (const msg of messages) {
@@ -138,49 +182,59 @@ async function connectToWhatsApp() {
 
       console.log(`📨 [${userId}] "${text}"`);
 
-      // Multi-line: tiap baris diproses sebagai transaksi/perintah terpisah,
-      // balasannya digabung jadi satu pesan dengan separator. Sama persis
-      // dengan perilaku Telegram (bot-tg.js).
-      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      // Antri per user supaya kalau user kirim 5 pesan beruntun, bot reply
+      // satu-satu dengan delay manusiawi, bukan barrage instan.
+      enqueue(resolvedJid, async () => {
+        // Mark read (manusia baca dulu).
+        try { await sock.readMessages([msg.key]); } catch (_) {}
 
-      try {
-        let reply;
-        if (lines.length <= 1) {
-          reply = await processMessage(userId, lines[0] || text);
-        } else {
-          const replies = [];
-          for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-            try {
-              const r = await processMessage(userId, line);
-              replies.push({ line, reply: r });
-            } catch (err) {
-              console.error(`❗ Error baris "${line}":`, err.message);
-              replies.push({ line, reply: friendlyErrorMessage(err) });
-            }
-          }
-          reply = replies
-            .map((r, i) => `*Baris ${i + 1}* — \`${r.line.replace(/`/g, "'")}\`\n${r.reply}`)
-            .join('\n\n━━━━━━━━━━\n\n');
-        }
+        // Multi-line: tiap baris diproses sebagai transaksi/perintah terpisah,
+        // balasannya digabung jadi satu pesan dengan separator. Sama persis
+        // dengan perilaku Telegram (bot-tg.js).
+        const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
 
-        if (reply) {
-          // quoted: msg — wajib untuk @lid JIDs supaya WA tahu route ke device yang benar
-          await sock.sendMessage(resolvedJid, { text: reply }, { quoted: msg });
-          console.log(`✉️  Reply terkirim ke ${userId}`);
-        }
-      } catch (err) {
-        console.error(`❗ Error untuk ${userId}:`, err.message);
         try {
-          await sock.sendMessage(
-            resolvedJid,
-            { text: friendlyErrorMessage(err) },
-            { quoted: msg }
-          );
-        } catch (sendErr) {
-          console.error('❗ Gagal kirim pesan error:', sendErr.message);
+          let reply;
+          if (lines.length <= 1) {
+            reply = await processMessage(userId, lines[0] || text);
+          } else {
+            const replies = [];
+            for (let i = 0; i < lines.length; i++) {
+              const line = lines[i];
+              try {
+                const r = await processMessage(userId, line);
+                replies.push({ line, reply: r });
+              } catch (err) {
+                console.error(`❗ Error baris "${line}":`, err.message);
+                replies.push({ line, reply: friendlyErrorMessage(err) });
+              }
+            }
+            reply = replies
+              .map((r, i) => `*Baris ${i + 1}* — \`${r.line.replace(/`/g, "'")}\`\n${r.reply}`)
+              .join('\n\n━━━━━━━━━━\n\n');
+          }
+
+          if (reply) {
+            // Tampilkan typing + random delay manusiawi.
+            await humanDelay(resolvedJid);
+            // quoted: msg — wajib untuk @lid JIDs supaya WA tahu route ke device yang benar
+            await sock.sendMessage(resolvedJid, { text: reply }, { quoted: msg });
+            console.log(`✉️  Reply terkirim ke ${userId}`);
+          }
+        } catch (err) {
+          console.error(`❗ Error untuk ${userId}:`, err.message);
+          try {
+            await humanDelay(resolvedJid);
+            await sock.sendMessage(
+              resolvedJid,
+              { text: friendlyErrorMessage(err) },
+              { quoted: msg }
+            );
+          } catch (sendErr) {
+            console.error('❗ Gagal kirim pesan error:', sendErr.message);
+          }
         }
-      }
+      });
     }
   });
 }
