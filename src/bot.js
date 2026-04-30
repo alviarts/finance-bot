@@ -91,12 +91,19 @@ console.log('╔═════════════════════�
 console.log('║   🤖  Telegram Finance Bot     ║');
 console.log('╚════════════════════════════════╝\n');
 
-bot.launch()
-  .then(() => {
-    console.log('✅ Bot Telegram berhasil terhubung!');
+(async () => {
+  try {
+    const me = await bot.telegram.getMe();
+    console.log(`✅ Bot Telegram berhasil terhubung sebagai @${me.username} (id ${me.id})`);
     console.log('💡 Buka chat dengan bot kamu di Telegram dan kirim "/start" atau "help" untuk memulai.\n');
-  })
-  .catch(err => {
-    console.error('❌ Fatal error saat launch:', err);
+
+    // bot.launch() resolves only after bot.stop() in Telegraf v4 — don't await.
+    bot.launch().catch(err => {
+      console.error('❌ Polling error:', err);
+      process.exit(1);
+    });
+  } catch (err) {
+    console.error('❌ Fatal error saat connect:', err.message);
     process.exit(1);
-  });
+  }
+})();
