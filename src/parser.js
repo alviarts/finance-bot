@@ -166,7 +166,32 @@ function parseMessage(text) {
     }
   }
 
-  // ── Pemasukan: "item amount" ─────────────────────────────────────────────
+  // ── Pemasukan: prefix eksplisit ──────────────────────────────────────────
+  // a) "dapat/terima/masuk <item> <amount>" — prefix + item + jumlah
+  const incomeWithItem = trimmed.match(
+    /^(?:dapat|dpt|terima|trm|masuk|in|income|pemasukan)\s+(.+?)\s+([\d.]+\s*(?:k|rb|ribu|jt|juta)?)$/i
+  );
+  if (incomeWithItem) {
+    const item   = capitalizeFirst(incomeWithItem[1].trim());
+    const amount = parseAmount(incomeWithItem[2]);
+    if (!isNaN(amount) && amount > 0) {
+      return { type: 'income', item, amount, category: guessCategory(item), date };
+    }
+  }
+
+  // b) Transfer pendek: "tf 200k", "transfer 150k", "ditf 50k", "di tf 200k",
+  //    "di transfer 200k" — tidak ada item, default-nya "Transfer".
+  const incomeTransfer = trimmed.match(
+    /^(?:tf|transfer|ditf|di\s+tf|di\s+transfer)\s+([\d.]+\s*(?:k|rb|ribu|jt|juta)?)$/i
+  );
+  if (incomeTransfer) {
+    const amount = parseAmount(incomeTransfer[1]);
+    if (!isNaN(amount) && amount > 0) {
+      return { type: 'income', item: 'Transfer', amount, category: 'Pemasukan', date };
+    }
+  }
+
+  // ── Pemasukan: "item amount" (fallback default untuk teks bebas) ─────────
   const incomeMatch = trimmed.match(/^(.+?)\s+([\d.]+\s*(?:k|rb|ribu|jt|juta)?)$/i);
   if (incomeMatch) {
     const item   = capitalizeFirst(incomeMatch[1].trim());
@@ -179,6 +204,16 @@ function parseMessage(text) {
     const isExpenseKeyword = expenseKeywords.some(kw =>
       incomeMatch[1].toLowerCase().startsWith(kw + ' ')
     );
+
+    // Prefix income eksplisit sudah ditangani di blok atas; jangan dobel-cocokkan
+    // di sini supaya item tidak ke-prepend "dapat", "terima", dll.
+    const incomeKeywords = ['dapat', 'dpt', 'terima', 'trm', 'masuk', 'in', 'income', 'pemasukan',
+                            'tf', 'transfer', 'ditf'];
+    const isIncomeKeyword = incomeKeywords.some(kw =>
+      incomeMatch[1].toLowerCase().startsWith(kw + ' ') ||
+      incomeMatch[1].toLowerCase() === kw
+    );
+    if (isIncomeKeyword) return null;
 
     if (!isExpenseKeyword && !isNaN(amount) && amount > 0) {
       return { type: 'income', item, amount, category: guessCategory(item), date };

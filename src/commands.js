@@ -208,9 +208,12 @@ function getHelpText() {
     `🤖 *Finance Bot — Panduan*\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
     `*📥 Catat Pemasukan:*\n` +
-    `  \`ayam 35000\`\n` +
-    `  \`gaji 5jt\`  /  \`gaji 5 jt\`\n` +
-    `  \`transfer 150k\`\n\n` +
+    `  \`ayam 35000\`  /  \`gaji 5jt\`\n` +
+    `  \`dapat uang 200k\`\n` +
+    `  \`terima bonus 1jt\`\n` +
+    `  \`tf 200k\`  /  \`transfer 150k\`\n` +
+    `  \`di tf 200k\`  /  \`ditf 200k\`\n` +
+    `  _Prefix lain: dpt, trm, masuk, in, income_\n\n` +
     `*📤 Catat Pengeluaran:*\n` +
     `  \`keluar bensin 50000\`\n` +
     `  \`bayar listrik 200rb\`\n` +
