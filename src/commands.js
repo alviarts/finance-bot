@@ -148,25 +148,54 @@ async function handleSaldo(userId) {
     return `💰 *Saldo*\n\nBelum ada transaksi sama sekali.`;
   }
 
+  // Akumulasi all-time + bulan ini dalam satu pass.
+  const now        = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
   let totalIncome  = 0;
   let totalExpense = 0;
+  let monthIncome  = 0;
+  let monthExpense = 0;
 
-  rows.forEach(row => {
+  for (const row of rows) {
     const amount = parseFloat(row[4]) || 0;
     if (amount > 0) totalIncome  += amount;
     else            totalExpense += Math.abs(amount);
-  });
 
-  const saldo      = totalIncome - totalExpense;
-  const saldoEmoji = saldo >= 0 ? '💰' : '⚠️';
+    // Parse tanggal kolom A: "DD/MM/YYYY"
+    const [d, m, y] = (row[0] || '').split('/');
+    if (!d || !m || !y) continue;
+    const rowDate = new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
+    if (isNaN(rowDate)) continue;
+
+    if (rowDate >= monthStart) {
+      if (amount > 0) monthIncome  += amount;
+      else            monthExpense += Math.abs(amount);
+    }
+  }
+
+  const saldoTotal    = totalIncome - totalExpense;
+  const tabunganBulan = monthIncome - monthExpense;
+
+  const namaBulan = now.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
+
+  // Telegram tidak punya warna text — pakai emoji sebagai indikator visual.
+  // 🟢 = sisa saldo positif, 🔴 = minus.
+  const statusBulan = tabunganBulan >= 0
+    ? `🟢 *Sisa Saldo*    : *${formatCurrency(tabunganBulan)}*`
+    : `🔴 *MINUS*         : *-${formatCurrency(Math.abs(tabunganBulan))}*`;
 
   return (
-    `${saldoEmoji} *Saldo Keseluruhan*\n` +
-    `━━━━━━━━━━━━━━━━━\n` +
-    `✅ Total Masuk  : ${formatCurrency(totalIncome)}\n` +
-    `❌ Total Keluar : ${formatCurrency(totalExpense)}\n` +
-    `━━━━━━━━━━━━━━━━━\n` +
-    `💵 Saldo : *${formatCurrency(saldo)}*`
+    `💰 *Saldo Keseluruhan*\n` +
+    `━━━━━━━━━━━━━━━━━━━\n` +
+    `✅ Total Masuk    : ${formatCurrency(totalIncome)}\n` +
+    `❌ Total Keluar   : ${formatCurrency(totalExpense)}\n` +
+    `💵 *Saldo Total*  : *${formatCurrency(saldoTotal)}*\n` +
+    `━━━━━━━━━━━━━━━━━━━\n` +
+    `📅 *Bulan Ini* — ${escapeMd(namaBulan)}\n` +
+    `📥 Pemasukan      : ${formatCurrency(monthIncome)}\n` +
+    `📤 Pengeluaran    : ${formatCurrency(monthExpense)}\n` +
+    statusBulan
   );
 }
 
