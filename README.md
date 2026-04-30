@@ -151,6 +151,54 @@ node --watch src/bot.js
 
 ---
 
+## 🚢 Deploy ke VPS (one-shot)
+
+> **JANGAN commit `.env` atau `credentials.json` ke git.** Token & service-account key harus tetap di luar repo. Script di bawah menerima keduanya secara interaktif lalu menyimpannya **lokal di VPS** (chmod 600), bukan ke git.
+
+Di VPS Ubuntu/Debian:
+
+```bash
+ssh user@vps
+git clone https://github.com/alviarts/finance-bot.git
+cd finance-bot
+bash scripts/deploy-vps.sh
+```
+
+Script akan:
+
+1. Instal Node.js 20.x (kalau belum ada).
+2. `npm install`.
+3. Tanya `TELEGRAM_BOT_TOKEN` & `SPREADSHEET_ID` → tulis ke `.env` (chmod 600).
+4. Minta paste isi service-account JSON → tulis ke `credentials.json` (chmod 600), validasi JSON.
+5. Instal & jalankan PM2 dengan nama proses `finance-bot`, lalu `pm2 save`.
+
+Setelah selesai, jalankan **sekali** perintah yang di-print PM2 untuk auto-startup saat reboot:
+
+```bash
+pm2 startup        # copy & jalankan baris `sudo env PATH=... pm2 ...` yang dia print
+pm2 save
+```
+
+**Update bot setelah ada perubahan kode:**
+
+```bash
+cd ~/finance-bot
+git pull
+npm install        # kalau dependency berubah
+pm2 restart finance-bot
+```
+
+**Cek status:**
+
+```bash
+pm2 status
+pm2 logs finance-bot     # tail logs
+pm2 stop finance-bot
+pm2 restart finance-bot
+```
+
+---
+
 ## 📁 Struktur Folder
 
 ```
@@ -160,8 +208,10 @@ finance-bot/
 │   ├── parser.js       ← Parse pesan teks
 │   ├── sheets.js       ← Google Sheets API
 │   └── commands.js     ← Logic tiap command
-├── credentials.json    ← Google service account key (kamu taruh di sini)
-├── .env                ← Konfigurasi (TELEGRAM_BOT_TOKEN, SPREADSHEET_ID)
+├── scripts/
+│   └── deploy-vps.sh   ← One-shot installer untuk VPS (Node + PM2 + .env + creds)
+├── credentials.json    ← Google service account key (kamu taruh di sini, gitignored)
+├── .env                ← Konfigurasi (TELEGRAM_BOT_TOKEN, SPREADSHEET_ID, gitignored)
 ├── .env.example        ← Contoh .env
 ├── .gitignore
 ├── package.json
