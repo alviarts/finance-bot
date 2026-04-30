@@ -6,12 +6,13 @@ const { parseMessage, formatCurrency } = require('./parser');
 const { appendTransaction, getTransactions, deleteLastTransaction } = require('./sheets');
 
 /**
- * Entry point — terima identifier pengirim + teks pesan, kembalikan reply string
- * Return null jika pesan tidak dikenali (bot diam)
+ * Entry point — terima identifier pengirim + teks pesan, kembalikan reply string.
+ * Untuk pesan yang tidak cocok dengan format apapun, kembalikan hint singkat
+ * yang mengarahkan pengguna untuk mengetik `help`.
  */
 async function processMessage(userId, text) {
   const parsed = parseMessage(text);
-  if (!parsed) return null;
+  if (!parsed) return getUnknownHint();
 
   if (parsed.type === 'income' || parsed.type === 'expense') {
     return handleTransaction(userId, parsed);
@@ -21,7 +22,14 @@ async function processMessage(userId, text) {
     return handleCommand(userId, parsed);
   }
 
-  return null;
+  return getUnknownHint();
+}
+
+function getUnknownHint() {
+  return (
+    `🤔 Pesannya belum aku kenal.\n` +
+    `Ketik *help* untuk melihat panduan lengkap.`
+  );
 }
 
 // ── Transaksi ────────────────────────────────────────────────────────────────
