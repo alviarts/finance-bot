@@ -1,8 +1,8 @@
 /**
  * sheets.js — Google Sheets API integration
  *
- * Setiap nomor WhatsApp mendapat sheet tab tersendiri.
- * Sheet tab dibuat otomatis saat nomor pertama kali mengirim pesan.
+ * Setiap pengguna Telegram mendapat sheet tab tersendiri (per Telegram user ID).
+ * Sheet tab dibuat otomatis saat pengguna pertama kali mengirim pesan.
  *
  * Struktur kolom:
  *   A: Tanggal  | B: Waktu | C: Tipe | D: Item | E: Jumlah | F: Catatan
@@ -58,8 +58,8 @@ async function getAllSheetNames() {
  * Pastikan sheet untuk nomor ini ada.
  * Jika belum, buat sheet baru dengan header & formatting.
  */
-async function ensureSheet(phoneNumber) {
-  const sheetName = phoneNumber;
+async function ensureSheet(userId) {
+  const sheetName = userId;
 
   // Sudah di cache? Langsung return
   if (sheetCache.has(sheetName)) return sheetName;
@@ -126,8 +126,8 @@ async function ensureSheet(phoneNumber) {
 /**
  * Tambah baris transaksi baru ke sheet nomor yang bersangkutan
  */
-async function appendTransaction(phoneNumber, { type, item, amount, note = '' }) {
-  const sheetName = await ensureSheet(phoneNumber);
+async function appendTransaction(userId, { type, item, amount, note = '' }) {
+  const sheetName = await ensureSheet(userId);
   const sheets    = await getSheetsClient();
 
   const now    = new Date();
@@ -143,15 +143,15 @@ async function appendTransaction(phoneNumber, { type, item, amount, note = '' })
     requestBody: { values: [[date, time, tipe, item, jumlah, note]] },
   });
 
-  console.log(`✏️  [${phoneNumber}] ${tipe}: ${item} ${jumlah}`);
+  console.log(`✏️  [${userId}] ${tipe}: ${item} ${jumlah}`);
 }
 
 /**
  * Ambil semua transaksi, opsional filter N hari terakhir
  * Return: array of rows [date, time, tipe, item, amount, note]
  */
-async function getTransactions(phoneNumber, { days = null } = {}) {
-  const sheetName = await ensureSheet(phoneNumber);
+async function getTransactions(userId, { days = null } = {}) {
+  const sheetName = await ensureSheet(userId);
   const sheets    = await getSheetsClient();
 
   const res  = await sheets.spreadsheets.values.get({
@@ -183,8 +183,8 @@ async function getTransactions(phoneNumber, { days = null } = {}) {
  * Hapus transaksi terakhir (undo)
  * Return: baris yang dihapus, atau null jika tidak ada data
  */
-async function deleteLastTransaction(phoneNumber) {
-  const sheetName = await ensureSheet(phoneNumber);
+async function deleteLastTransaction(userId) {
+  const sheetName = await ensureSheet(userId);
   const sheets    = await getSheetsClient();
 
   const res = await sheets.spreadsheets.values.get({
@@ -219,7 +219,7 @@ async function deleteLastTransaction(phoneNumber) {
     },
   });
 
-  console.log(`🗑️  [${phoneNumber}] Hapus baris: ${lastRow}`);
+  console.log(`🗑️  [${userId}] Hapus baris: ${lastRow}`);
   return lastRow;
 }
 

@@ -1,24 +1,24 @@
 /**
- * commands.js — Proses pesan dan kembalikan reply teks untuk WhatsApp
+ * commands.js — Proses pesan dan kembalikan reply teks (platform-agnostic)
  */
 
 const { parseMessage, formatCurrency } = require('./parser');
 const { appendTransaction, getTransactions, deleteLastTransaction } = require('./sheets');
 
 /**
- * Entry point — terima nomor pengirim + teks pesan, kembalikan reply string
+ * Entry point — terima identifier pengirim + teks pesan, kembalikan reply string
  * Return null jika pesan tidak dikenali (bot diam)
  */
-async function processMessage(phoneNumber, text) {
+async function processMessage(userId, text) {
   const parsed = parseMessage(text);
   if (!parsed) return null;
 
   if (parsed.type === 'income' || parsed.type === 'expense') {
-    return handleTransaction(phoneNumber, parsed);
+    return handleTransaction(userId, parsed);
   }
 
   if (parsed.type === 'command') {
-    return handleCommand(phoneNumber, parsed);
+    return handleCommand(userId, parsed);
   }
 
   return null;
@@ -26,8 +26,8 @@ async function processMessage(phoneNumber, text) {
 
 // ── Transaksi ────────────────────────────────────────────────────────────────
 
-async function handleTransaction(phoneNumber, { type, item, amount }) {
-  await appendTransaction(phoneNumber, { type, item, amount });
+async function handleTransaction(userId, { type, item, amount }) {
+  await appendTransaction(userId, { type, item, amount });
 
   const emoji = type === 'income' ? '✅' : '❌';
   const label = type === 'income' ? 'Pemasukan' : 'Pengeluaran';
@@ -42,12 +42,12 @@ async function handleTransaction(phoneNumber, { type, item, amount }) {
 
 // ── Command routing ──────────────────────────────────────────────────────────
 
-async function handleCommand(phoneNumber, { command, period }) {
+async function handleCommand(userId, { command, period }) {
   switch (command) {
-    case 'rekap':  return handleRekap(phoneNumber, period || 'bulan');
-    case 'saldo':  return handleSaldo(phoneNumber);
-    case 'daftar': return handleDaftar(phoneNumber);
-    case 'hapus':  return handleHapus(phoneNumber);
+    case 'rekap':  return handleRekap(userId, period || 'bulan');
+    case 'saldo':  return handleSaldo(userId);
+    case 'daftar': return handleDaftar(userId);
+    case 'hapus':  return handleHapus(userId);
     case 'help':   return getHelpText();
     default:       return null;
   }
@@ -55,7 +55,7 @@ async function handleCommand(phoneNumber, { command, period }) {
 
 // ── Rekap ────────────────────────────────────────────────────────────────────
 
-async function handleRekap(phoneNumber, period) {
+async function handleRekap(userId, period) {
   const periodMap = {
     hari:   { days: 1,  label: 'Hari Ini' },
     minggu: { days: 7,  label: '7 Hari Terakhir' },
@@ -63,7 +63,7 @@ async function handleRekap(phoneNumber, period) {
   };
 
   const { days, label } = periodMap[period] || periodMap.bulan;
-  const rows = await getTransactions(phoneNumber, { days });
+  const rows = await getTransactions(userId, { days });
 
   if (rows.length === 0) {
     return `📊 *Rekap ${label}*\n\nBelum ada transaksi pada periode ini.`;
@@ -94,8 +94,8 @@ async function handleRekap(phoneNumber, period) {
 
 // ── Saldo ────────────────────────────────────────────────────────────────────
 
-async function handleSaldo(phoneNumber) {
-  const rows = await getTransactions(phoneNumber);
+async function handleSaldo(userId) {
+  const rows = await getTransactions(userId);
 
   if (rows.length === 0) {
     return `💰 *Saldo*\n\nBelum ada transaksi sama sekali.`;
@@ -125,8 +125,8 @@ async function handleSaldo(phoneNumber) {
 
 // ── Daftar ───────────────────────────────────────────────────────────────────
 
-async function handleDaftar(phoneNumber) {
-  const rows = await getTransactions(phoneNumber);
+async function handleDaftar(userId) {
+  const rows = await getTransactions(userId);
 
   if (rows.length === 0) {
     return `📋 *Daftar Transaksi*\n\nBelum ada transaksi.`;
@@ -148,8 +148,8 @@ async function handleDaftar(phoneNumber) {
 
 // ── Hapus (undo) ─────────────────────────────────────────────────────────────
 
-async function handleHapus(phoneNumber) {
-  const deleted = await deleteLastTransaction(phoneNumber);
+async function handleHapus(userId) {
+  const deleted = await deleteLastTransaction(userId);
 
   if (!deleted) {
     return `🗑️ Tidak ada transaksi yang bisa dihapus.`;

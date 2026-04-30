@@ -1,5 +1,5 @@
 /**
- * parser.js — Parse pesan WhatsApp menjadi data transaksi
+ * parser.js — Parse pesan Telegram menjadi data transaksi
  *
  * Format Pemasukan:
  *   "ayam 35000"     → income, item: Ayam, amount: 35000
