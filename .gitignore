@@ -1,4 +1,5 @@
-auth_info/
 node_modules/
 credentials.json
 .env
+auth_info/
+logs/

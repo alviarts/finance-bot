@@ -1,61 +1,108 @@
 /**
- * commands.js — Proses pesan dan kembalikan reply teks untuk WhatsApp
+ * commands.js — Proses pesan dan kembalikan reply teks (platform-agnostic)
  */
 
 const { parseMessage, formatCurrency } = require('./parser');
-const { appendTransaction, getTransactions, deleteLastTransaction } = require('./sheets');
+const {
+  appendTransaction,
+  getTransactions,
+  deleteLastTransaction,
+  deleteAllTransactions,
+} = require('./sheets');
+
+// In-memory tracking konfirmasi `hapus semua` per user. TTL 60 detik.
+// Map<userId, timestamp>
+const pendingHapusSemua = new Map();
+const HAPUS_SEMUA_TTL_MS = 60_000;
 
 /**
- * Entry point — terima nomor pengirim + teks pesan, kembalikan reply string
- * Return null jika pesan tidak dikenali (bot diam)
+ * Escape karakter khusus Telegram Markdown (v1) supaya teks user-derived
+ * (misal nama item `beli_ayam`) tidak bikin Telegram reject reply dengan
+ * 400 Bad Request.
  */
-async function processMessage(phoneNumber, text) {
+function escapeMd(text) {
+  if (text === null || text === undefined) return '';
+  return String(text).replace(/([_*`\[\]])/g, '\\$1');
+}
+
+/**
+ * Entry point — terima identifier pengirim + teks pesan, kembalikan reply string.
+ * Untuk pesan yang tidak cocok dengan format apapun, kembalikan hint singkat
+ * yang mengarahkan pengguna untuk mengetik `help`.
+ */
+async function processMessage(userId, text) {
   const parsed = parseMessage(text);
-  if (!parsed) return null;
+  if (!parsed) return getUnknownHint();
 
   if (parsed.type === 'income' || parsed.type === 'expense') {
-    return handleTransaction(phoneNumber, parsed);
+    return handleTransaction(userId, parsed);
   }
 
   if (parsed.type === 'command') {
-    return handleCommand(phoneNumber, parsed);
+    return handleCommand(userId, parsed);
   }
 
-  return null;
+  return getUnknownHint();
+}
+
+function getUnknownHint() {
+  return (
+    `🤔 Pesannya belum aku kenal.\n` +
+    `Ketik *help* untuk melihat panduan lengkap.`
+  );
 }
 
 // ── Transaksi ────────────────────────────────────────────────────────────────
 
-async function handleTransaction(phoneNumber, { type, item, amount }) {
-  await appendTransaction(phoneNumber, { type, item, amount });
+async function handleTransaction(userId, { type, item, amount, category, date }) {
+  await appendTransaction(userId, {
+    type,
+    item,
+    amount,
+    note: category || '',
+    when: date || null,
+  });
 
   const emoji = type === 'income' ? '✅' : '❌';
   const label = type === 'income' ? 'Pemasukan' : 'Pengeluaran';
 
+  // Format tanggal yang ditampilkan di reply (kalau backdated, tampilkan tanggalnya).
+  let waktuLine = '';
+  if (date instanceof Date) {
+    const d = date.toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    waktuLine = `📅 Tanggal: ${escapeMd(d)}\n`;
+  }
+
+  const kategoriLine = category ? `🏷️ Kategori: ${escapeMd(category)}\n` : '';
+
   return (
     `${emoji} *${label} dicatat!*\n` +
-    `📦 Item   : ${item}\n` +
-    `💵 Jumlah : ${formatCurrency(amount)}\n\n` +
-    `_Ketik *saldo* untuk melihat total, atau *help* untuk panduan._`
+    `📦 Item   : ${escapeMd(item)}\n` +
+    `💵 Jumlah : ${formatCurrency(amount)}\n` +
+    kategoriLine +
+    waktuLine +
+    `\n_Ketik saldo untuk melihat total, atau help untuk panduan._`
   );
 }
 
 // ── Command routing ──────────────────────────────────────────────────────────
 
-async function handleCommand(phoneNumber, { command, period }) {
+async function handleCommand(userId, { command, period }) {
   switch (command) {
-    case 'rekap':  return handleRekap(phoneNumber, period || 'bulan');
-    case 'saldo':  return handleSaldo(phoneNumber);
-    case 'daftar': return handleDaftar(phoneNumber);
-    case 'hapus':  return handleHapus(phoneNumber);
-    case 'help':   return getHelpText();
+    case 'rekap':  return handleRekap(userId, period || 'bulan');
+    case 'saldo':  return handleSaldo(userId);
+    case 'daftar': return handleDaftar(userId);
+    case 'hapus':           return handleHapus(userId);
+    case 'hapus_semua':     return handleHapusSemuaRequest(userId);
+    case 'ya_hapus_semua':  return handleHapusSemuaConfirm(userId);
+    case 'help':            return getHelpText();
     default:       return null;
   }
 }
 
 // ── Rekap ────────────────────────────────────────────────────────────────────
 
-async function handleRekap(phoneNumber, period) {
+async function handleRekap(userId, period) {
   const periodMap = {
     hari:   { days: 1,  label: 'Hari Ini' },
     minggu: { days: 7,  label: '7 Hari Terakhir' },
@@ -63,7 +110,7 @@ async function handleRekap(phoneNumber, period) {
   };
 
   const { days, label } = periodMap[period] || periodMap.bulan;
-  const rows = await getTransactions(phoneNumber, { days });
+  const rows = await getTransactions(userId, { days });
 
   if (rows.length === 0) {
     return `📊 *Rekap ${label}*\n\nBelum ada transaksi pada periode ini.`;
@@ -94,39 +141,68 @@ async function handleRekap(phoneNumber, period) {
 
 // ── Saldo ────────────────────────────────────────────────────────────────────
 
-async function handleSaldo(phoneNumber) {
-  const rows = await getTransactions(phoneNumber);
+async function handleSaldo(userId) {
+  const rows = await getTransactions(userId);
 
   if (rows.length === 0) {
     return `💰 *Saldo*\n\nBelum ada transaksi sama sekali.`;
   }
 
+  // Akumulasi all-time + bulan ini dalam satu pass.
+  const now        = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
   let totalIncome  = 0;
   let totalExpense = 0;
+  let monthIncome  = 0;
+  let monthExpense = 0;
 
-  rows.forEach(row => {
+  for (const row of rows) {
     const amount = parseFloat(row[4]) || 0;
     if (amount > 0) totalIncome  += amount;
     else            totalExpense += Math.abs(amount);
-  });
 
-  const saldo      = totalIncome - totalExpense;
-  const saldoEmoji = saldo >= 0 ? '💰' : '⚠️';
+    // Parse tanggal kolom A: "DD/MM/YYYY"
+    const [d, m, y] = (row[0] || '').split('/');
+    if (!d || !m || !y) continue;
+    const rowDate = new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
+    if (isNaN(rowDate)) continue;
+
+    if (rowDate >= monthStart) {
+      if (amount > 0) monthIncome  += amount;
+      else            monthExpense += Math.abs(amount);
+    }
+  }
+
+  const saldoTotal    = totalIncome - totalExpense;
+  const tabunganBulan = monthIncome - monthExpense;
+
+  const namaBulan = now.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
+
+  // Telegram tidak punya warna text — pakai emoji sebagai indikator visual.
+  // 🟢 = sisa saldo positif, 🔴 = minus.
+  const statusBulan = tabunganBulan >= 0
+    ? `🟢 *Sisa Saldo*    : *${formatCurrency(tabunganBulan)}*`
+    : `🔴 *MINUS*         : *-${formatCurrency(Math.abs(tabunganBulan))}*`;
 
   return (
-    `${saldoEmoji} *Saldo Keseluruhan*\n` +
-    `━━━━━━━━━━━━━━━━━\n` +
-    `✅ Total Masuk  : ${formatCurrency(totalIncome)}\n` +
-    `❌ Total Keluar : ${formatCurrency(totalExpense)}\n` +
-    `━━━━━━━━━━━━━━━━━\n` +
-    `💵 Saldo : *${formatCurrency(saldo)}*`
+    `💰 *Saldo Keseluruhan*\n` +
+    `━━━━━━━━━━━━━━━━━━━\n` +
+    `✅ Total Masuk    : ${formatCurrency(totalIncome)}\n` +
+    `❌ Total Keluar   : ${formatCurrency(totalExpense)}\n` +
+    `💵 *Saldo Total*  : *${formatCurrency(saldoTotal)}*\n` +
+    `━━━━━━━━━━━━━━━━━━━\n` +
+    `📅 *Bulan Ini* — ${escapeMd(namaBulan)}\n` +
+    `📥 Pemasukan      : ${formatCurrency(monthIncome)}\n` +
+    `📤 Pengeluaran    : ${formatCurrency(monthExpense)}\n` +
+    statusBulan
   );
 }
 
 // ── Daftar ───────────────────────────────────────────────────────────────────
 
-async function handleDaftar(phoneNumber) {
-  const rows = await getTransactions(phoneNumber);
+async function handleDaftar(userId) {
+  const rows = await getTransactions(userId);
 
   if (rows.length === 0) {
     return `📋 *Daftar Transaksi*\n\nBelum ada transaksi.`;
@@ -140,7 +216,7 @@ async function handleDaftar(phoneNumber) {
     const [date, time, , item, amount] = row;
     const amt   = parseFloat(amount) || 0;
     const emoji = amt > 0 ? '✅' : '❌';
-    msg += `${emoji} ${item} — *${formatCurrency(Math.abs(amt))}*\n   _${date} ${time}_\n`;
+    msg += `${emoji} ${escapeMd(item)} — *${formatCurrency(Math.abs(amt))}*\n   _${escapeMd(date)} ${escapeMd(time)}_\n`;
   });
 
   return msg;
@@ -148,8 +224,8 @@ async function handleDaftar(phoneNumber) {
 
 // ── Hapus (undo) ─────────────────────────────────────────────────────────────
 
-async function handleHapus(phoneNumber) {
-  const deleted = await deleteLastTransaction(phoneNumber);
+async function handleHapus(userId) {
+  const deleted = await deleteLastTransaction(userId);
 
   if (!deleted) {
     return `🗑️ Tidak ada transaksi yang bisa dihapus.`;
@@ -160,9 +236,56 @@ async function handleHapus(phoneNumber) {
 
   return (
     `🗑️ *Transaksi dihapus!*\n` +
-    `📦 Item   : ${item}\n` +
+    `📦 Item   : ${escapeMd(item)}\n` +
     `💵 Jumlah : ${formatCurrency(Math.abs(amt))}\n` +
-    `📅 Waktu  : ${date} ${time}`
+    `📅 Waktu  : ${escapeMd(date)} ${escapeMd(time)}`
+  );
+}
+
+// ── Hapus Semua (dengan konfirmasi 2-langkah) ────────────────────────
+
+function handleHapusSemuaRequest(userId) {
+  pendingHapusSemua.set(userId, Date.now());
+  return (
+    `⚠️ *Konfirmasi Hapus Semua*\n` +
+    `━━━━━━━━━━━━━━━━━━\n` +
+    `Ini akan menghapus *semua* transaksi kamu di sheet ini.\n` +
+    `Aksi ini *tidak bisa di-undo*.\n\n` +
+    `Untuk lanjut, balas:\n` +
+    `   \`ya hapus semua\`\n\n` +
+    `Konfirmasi berlaku selama *60 detik*. Setelah itu otomatis batal.`
+  );
+}
+
+async function handleHapusSemuaConfirm(userId) {
+  const ts = pendingHapusSemua.get(userId);
+  pendingHapusSemua.delete(userId);
+
+  if (!ts) {
+    return (
+      `🤔 Tidak ada permintaan hapus yang aktif.\n` +
+      `Ketik \`hapus semua\` dulu untuk memulai konfirmasi.`
+    );
+  }
+
+  if (Date.now() - ts > HAPUS_SEMUA_TTL_MS) {
+    return (
+      `⏱️ Konfirmasi sudah kedaluwarsa (lewat 60 detik).\n` +
+      `Ketik \`hapus semua\` lagi kalau masih mau hapus.`
+    );
+  }
+
+  const count = await deleteAllTransactions(userId);
+
+  if (count === 0) {
+    return `🧹 Tidak ada transaksi untuk dihapus. Sheet kamu memang sudah kosong.`;
+  }
+
+  return (
+    `🧹 *Semua transaksi terhapus!*\n` +
+    `━━━━━━━━━━━━━━━━━━\n` +
+    `Total dihapus: *${count} transaksi*.\n` +
+    `Header sheet tetap. Kamu bisa langsung mulai catat transaksi baru.`
   );
 }
 
@@ -173,13 +296,28 @@ function getHelpText() {
     `🤖 *Finance Bot — Panduan*\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
     `*📥 Catat Pemasukan:*\n` +
-    `  \`ayam 35000\`\n` +
-    `  \`gaji 5jt\`\n` +
-    `  \`transfer 150k\`\n\n` +
+    `  \`ayam 35000\`  /  \`gaji 5jt\`\n` +
+    `  \`dapat uang 200k\`\n` +
+    `  \`terima bonus 1jt\`\n` +
+    `  \`tf 200k\`  /  \`transfer 150k\`\n` +
+    `  \`di tf 200k\`  /  \`ditf 200k\`\n` +
+    `  _Prefix lain: dpt, trm, masuk, in, income_\n\n` +
     `*📤 Catat Pengeluaran:*\n` +
-    `  \`keluar bensin 50000\`\n` +
-    `  \`keluar makan 25k\`\n` +
-    `  \`- listrik 200rb\`\n\n` +
+    `  \`bayar listrik 200rb\`\n` +
+    `  \`beli ayam 35k\`\n` +
+    `  \`belanja sayur 50k\`\n` +
+    `  \`kasih ojek 20k\`\n` +
+    `  \`traktir teman 100k\`\n` +
+    `  \`topup pulsa 50k\`\n` +
+    `  \`isi bensin 50k\`  /  \`isi ulang gas 25k\`\n` +
+    `  \`jajan kopi 25k\`\n` +
+    `  \`keluar bensin 50000\`  /  \`- bensin 50000\`\n` +
+    `  _Singkatan: byr, bli, blnj, ksh, trkt, tup, jjn_\n\n` +
+    `*📅 Backdated (transaksi hari lain):*\n` +
+    `  \`ayam 35000 kemarin\`\n` +
+    `  \`gaji 5jt 2 hari lalu\`\n` +
+    `  \`listrik 200rb tgl 25/12\`\n` +
+    `  \`bensin 50000 25/12/2025\`\n\n` +
     `*📊 Laporan:*\n` +
     `  \`rekap\` — 30 hari terakhir\n` +
     `  \`rekap hari\` — hari ini\n` +
@@ -187,8 +325,10 @@ function getHelpText() {
     `  \`saldo\` — total saldo semua waktu\n` +
     `  \`daftar\` — 10 transaksi terakhir\n\n` +
     `*🛠️ Lainnya:*\n` +
-    `  \`hapus\` — hapus transaksi terakhir\n` +
-    `  \`help\` — tampilkan panduan ini`
+    `  \`hapus\` — hapus transaksi terakhir (undo)\n` +
+    `  \`hapus semua\` — hapus *semua* transaksi (perlu konfirmasi)\n` +
+    `  \`help\` — tampilkan panduan ini\n\n` +
+    `*🏷️ Kategori auto-deteksi:* Makanan, Transportasi, Tagihan, Belanja, Kesehatan, Hiburan, Pendidikan, Pemasukan.`
   );
 }
 

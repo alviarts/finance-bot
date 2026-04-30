@@ -1,8 +1,8 @@
 /**
  * sheets.js — Google Sheets API integration
  *
- * Setiap nomor WhatsApp mendapat sheet tab tersendiri.
- * Sheet tab dibuat otomatis saat nomor pertama kali mengirim pesan.
+ * Setiap pengguna Telegram mendapat sheet tab tersendiri (per Telegram user ID).
+ * Sheet tab dibuat otomatis saat pengguna pertama kali mengirim pesan.
  *
  * Struktur kolom:
  *   A: Tanggal  | B: Waktu | C: Tipe | D: Item | E: Jumlah | F: Catatan
@@ -58,8 +58,8 @@ async function getAllSheetNames() {
  * Pastikan sheet untuk nomor ini ada.
  * Jika belum, buat sheet baru dengan header & formatting.
  */
-async function ensureSheet(phoneNumber) {
-  const sheetName = phoneNumber;
+async function ensureSheet(userId) {
+  const sheetName = userId;
 
   // Sudah di cache? Langsung return
   if (sheetCache.has(sheetName)) return sheetName;
@@ -124,15 +124,17 @@ async function ensureSheet(phoneNumber) {
 }
 
 /**
- * Tambah baris transaksi baru ke sheet nomor yang bersangkutan
+ * Tambah baris transaksi baru ke sheet user yang bersangkutan.
+ * Opsional `when` (Date) override-tanggal — kalau null, pakai sekarang.
+ * Opsional `note` — biasanya diisi kategori auto-deteksi.
  */
-async function appendTransaction(phoneNumber, { type, item, amount, note = '' }) {
-  const sheetName = await ensureSheet(phoneNumber);
+async function appendTransaction(userId, { type, item, amount, note = '', when = null }) {
+  const sheetName = await ensureSheet(userId);
   const sheets    = await getSheetsClient();
 
-  const now    = new Date();
-  const date   = now.toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' });
-  const time   = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+  const ts     = when instanceof Date && !isNaN(when) ? when : new Date();
+  const date   = ts.toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const time   = ts.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
   const tipe   = type === 'income' ? 'Pemasukan' : 'Pengeluaran';
   const jumlah = type === 'income' ? amount : -amount; // pengeluaran disimpan negatif
 
@@ -143,15 +145,15 @@ async function appendTransaction(phoneNumber, { type, item, amount, note = '' })
     requestBody: { values: [[date, time, tipe, item, jumlah, note]] },
   });
 
-  console.log(`✏️  [${phoneNumber}] ${tipe}: ${item} ${jumlah}`);
+  console.log(`✏️  [${userId}] ${tipe}: ${item} ${jumlah}${note ? ` (${note})` : ''}${when ? ` [backdated ${date}]` : ''}`);
 }
 
 /**
  * Ambil semua transaksi, opsional filter N hari terakhir
  * Return: array of rows [date, time, tipe, item, amount, note]
  */
-async function getTransactions(phoneNumber, { days = null } = {}) {
-  const sheetName = await ensureSheet(phoneNumber);
+async function getTransactions(userId, { days = null } = {}) {
+  const sheetName = await ensureSheet(userId);
   const sheets    = await getSheetsClient();
 
   const res  = await sheets.spreadsheets.values.get({
@@ -183,8 +185,8 @@ async function getTransactions(phoneNumber, { days = null } = {}) {
  * Hapus transaksi terakhir (undo)
  * Return: baris yang dihapus, atau null jika tidak ada data
  */
-async function deleteLastTransaction(phoneNumber) {
-  const sheetName = await ensureSheet(phoneNumber);
+async function deleteLastTransaction(userId) {
+  const sheetName = await ensureSheet(userId);
   const sheets    = await getSheetsClient();
 
   const res = await sheets.spreadsheets.values.get({
@@ -219,8 +221,41 @@ async function deleteLastTransaction(phoneNumber) {
     },
   });
 
-  console.log(`🗑️  [${phoneNumber}] Hapus baris: ${lastRow}`);
+  console.log(`🗑️  [${userId}] Hapus baris: ${lastRow}`);
   return lastRow;
 }
 
-module.exports = { ensureSheet, appendTransaction, getTransactions, deleteLastTransaction };
+/**
+ * Hapus SEMUA transaksi user (clear data rows, header tetap dipertahankan).
+ * Return: jumlah baris data yang dihapus (0 kalau memang sudah kosong).
+ */
+async function deleteAllTransactions(userId) {
+  const sheetName = await ensureSheet(userId);
+  const sheets    = await getSheetsClient();
+
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `'${sheetName}'!A:F`,
+  });
+
+  const rows = res.data.values || [];
+  const dataCount = Math.max(0, rows.length - 1); // exclude header
+  if (dataCount === 0) return 0;
+
+  // Clear isi range data (baris 2 ke bawah). Header (baris 1) tetap.
+  await sheets.spreadsheets.values.clear({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `'${sheetName}'!A2:F`,
+  });
+
+  console.log(`🧹 [${userId}] Hapus semua: ${dataCount} baris dibersihkan`);
+  return dataCount;
+}
+
+module.exports = {
+  ensureSheet,
+  appendTransaction,
+  getTransactions,
+  deleteLastTransaction,
+  deleteAllTransactions,
+};
