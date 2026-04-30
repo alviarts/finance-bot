@@ -6,6 +6,16 @@ const { parseMessage, formatCurrency } = require('./parser');
 const { appendTransaction, getTransactions, deleteLastTransaction } = require('./sheets');
 
 /**
+ * Escape karakter khusus Telegram Markdown (v1) supaya teks user-derived
+ * (misal nama item `beli_ayam`) tidak bikin Telegram reject reply dengan
+ * 400 Bad Request.
+ */
+function escapeMd(text) {
+  if (text === null || text === undefined) return '';
+  return String(text).replace(/([_*`\[\]])/g, '\\$1');
+}
+
+/**
  * Entry point — terima identifier pengirim + teks pesan, kembalikan reply string.
  * Untuk pesan yang tidak cocok dengan format apapun, kembalikan hint singkat
  * yang mengarahkan pengguna untuk mengetik `help`.
@@ -34,17 +44,34 @@ function getUnknownHint() {
 
 // ── Transaksi ────────────────────────────────────────────────────────────────
 
-async function handleTransaction(userId, { type, item, amount }) {
-  await appendTransaction(userId, { type, item, amount });
+async function handleTransaction(userId, { type, item, amount, category, date }) {
+  await appendTransaction(userId, {
+    type,
+    item,
+    amount,
+    note: category || '',
+    when: date || null,
+  });
 
   const emoji = type === 'income' ? '✅' : '❌';
   const label = type === 'income' ? 'Pemasukan' : 'Pengeluaran';
 
+  // Format tanggal yang ditampilkan di reply (kalau backdated, tampilkan tanggalnya).
+  let waktuLine = '';
+  if (date instanceof Date) {
+    const d = date.toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    waktuLine = `📅 Tanggal: ${escapeMd(d)}\n`;
+  }
+
+  const kategoriLine = category ? `🏷️ Kategori: ${escapeMd(category)}\n` : '';
+
   return (
     `${emoji} *${label} dicatat!*\n` +
-    `📦 Item   : ${item}\n` +
-    `💵 Jumlah : ${formatCurrency(amount)}\n\n` +
-    `_Ketik *saldo* untuk melihat total, atau *help* untuk panduan._`
+    `📦 Item   : ${escapeMd(item)}\n` +
+    `💵 Jumlah : ${formatCurrency(amount)}\n` +
+    kategoriLine +
+    waktuLine +
+    `\n_Ketik saldo untuk melihat total, atau help untuk panduan._`
   );
 }
 
@@ -148,7 +175,7 @@ async function handleDaftar(userId) {
     const [date, time, , item, amount] = row;
     const amt   = parseFloat(amount) || 0;
     const emoji = amt > 0 ? '✅' : '❌';
-    msg += `${emoji} ${item} — *${formatCurrency(Math.abs(amt))}*\n   _${date} ${time}_\n`;
+    msg += `${emoji} ${escapeMd(item)} — *${formatCurrency(Math.abs(amt))}*\n   _${escapeMd(date)} ${escapeMd(time)}_\n`;
   });
 
   return msg;
@@ -168,9 +195,9 @@ async function handleHapus(userId) {
 
   return (
     `🗑️ *Transaksi dihapus!*\n` +
-    `📦 Item   : ${item}\n` +
+    `📦 Item   : ${escapeMd(item)}\n` +
     `💵 Jumlah : ${formatCurrency(Math.abs(amt))}\n` +
-    `📅 Waktu  : ${date} ${time}`
+    `📅 Waktu  : ${escapeMd(date)} ${escapeMd(time)}`
   );
 }
 
@@ -182,12 +209,17 @@ function getHelpText() {
     `━━━━━━━━━━━━━━━━━━━━\n` +
     `*📥 Catat Pemasukan:*\n` +
     `  \`ayam 35000\`\n` +
-    `  \`gaji 5jt\`\n` +
+    `  \`gaji 5jt\`  /  \`gaji 5 jt\`\n` +
     `  \`transfer 150k\`\n\n` +
     `*📤 Catat Pengeluaran:*\n` +
     `  \`keluar bensin 50000\`\n` +
     `  \`keluar makan 25k\`\n` +
     `  \`- listrik 200rb\`\n\n` +
+    `*📅 Backdated (transaksi hari lain):*\n` +
+    `  \`ayam 35000 kemarin\`\n` +
+    `  \`gaji 5jt 2 hari lalu\`\n` +
+    `  \`listrik 200rb tgl 25/12\`\n` +
+    `  \`bensin 50000 25/12/2025\`\n\n` +
     `*📊 Laporan:*\n` +
     `  \`rekap\` — 30 hari terakhir\n` +
     `  \`rekap hari\` — hari ini\n` +
@@ -196,7 +228,8 @@ function getHelpText() {
     `  \`daftar\` — 10 transaksi terakhir\n\n` +
     `*🛠️ Lainnya:*\n` +
     `  \`hapus\` — hapus transaksi terakhir\n` +
-    `  \`help\` — tampilkan panduan ini`
+    `  \`help\` — tampilkan panduan ini\n\n` +
+    `*🏷️ Kategori auto-deteksi:* Makanan, Transportasi, Tagihan, Belanja, Kesehatan, Hiburan, Pendidikan, Pemasukan.`
   );
 }
 

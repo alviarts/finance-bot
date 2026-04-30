@@ -124,15 +124,17 @@ async function ensureSheet(userId) {
 }
 
 /**
- * Tambah baris transaksi baru ke sheet nomor yang bersangkutan
+ * Tambah baris transaksi baru ke sheet user yang bersangkutan.
+ * Opsional `when` (Date) override-tanggal — kalau null, pakai sekarang.
+ * Opsional `note` — biasanya diisi kategori auto-deteksi.
  */
-async function appendTransaction(userId, { type, item, amount, note = '' }) {
+async function appendTransaction(userId, { type, item, amount, note = '', when = null }) {
   const sheetName = await ensureSheet(userId);
   const sheets    = await getSheetsClient();
 
-  const now    = new Date();
-  const date   = now.toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' });
-  const time   = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+  const ts     = when instanceof Date && !isNaN(when) ? when : new Date();
+  const date   = ts.toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const time   = ts.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
   const tipe   = type === 'income' ? 'Pemasukan' : 'Pengeluaran';
   const jumlah = type === 'income' ? amount : -amount; // pengeluaran disimpan negatif
 
@@ -143,7 +145,7 @@ async function appendTransaction(userId, { type, item, amount, note = '' }) {
     requestBody: { values: [[date, time, tipe, item, jumlah, note]] },
   });
 
-  console.log(`✏️  [${userId}] ${tipe}: ${item} ${jumlah}`);
+  console.log(`✏️  [${userId}] ${tipe}: ${item} ${jumlah}${note ? ` (${note})` : ''}${when ? ` [backdated ${date}]` : ''}`);
 }
 
 /**
