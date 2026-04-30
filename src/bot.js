@@ -47,10 +47,44 @@ bot.help(async ctx => {
 // Handler utama: semua pesan teks (selain command yang ditangani di atas)
 bot.on('text', async ctx => {
   const userId = getUserId(ctx);
-  const text   = (ctx.message?.text || '').trim();
+  const raw    = (ctx.message?.text || '').trim();
 
-  if (!text) return;
+  if (!raw) return;
 
+  // Pesan multi-baris: tiap baris diproses sebagai transaksi/perintah terpisah.
+  const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+
+  if (lines.length === 1) {
+    await handleOneLine(ctx, userId, lines[0]);
+    return;
+  }
+
+  console.log(`📨 [${userId}] (multi-line, ${lines.length} baris)`);
+
+  const replies = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    try {
+      const reply = await processMessage(userId, line);
+      replies.push({ line, reply });
+    } catch (err) {
+      console.error(`❗ Error baris "${line}":`, err.message);
+      replies.push({ line, reply: friendlyErrorMessage(err) });
+    }
+  }
+
+  // Gabung jadi satu pesan dengan separator + nomor baris.
+  const SEP = '\n\n━━━━━━━━━━\n\n';
+  const combined = replies
+    .map((r, i) => `*Baris ${i + 1}* — \`${escapeBacktick(r.line)}\`\n${r.reply}`)
+    .join(SEP);
+
+  // Telegram membatasi 4096 char per pesan. Pecah kalau lewat.
+  await sendChunked(ctx, combined);
+  console.log(`✉️  Multi-line reply (${lines.length} baris) terkirim ke ${userId}`);
+});
+
+async function handleOneLine(ctx, userId, text) {
   console.log(`📨 [${userId}] "${text}"`);
 
   try {
@@ -66,13 +100,40 @@ bot.on('text', async ctx => {
     console.error(`❗ Error untuk ${userId}:`, err.message);
     const friendly = friendlyErrorMessage(err);
     try {
-      // Pesan error selalu plain-text — hindari masalah parsing Markdown.
       await ctx.reply(friendly);
     } catch (sendErr) {
       console.error('❗ Gagal kirim pesan error:', sendErr.message);
     }
   }
-});
+}
+
+/** Escape backtick untuk inline-code echo input baris di multi-line reply. */
+function escapeBacktick(s) {
+  return String(s).replace(/`/g, '\\`');
+}
+
+/** Pecah text jadi chunk <= 4000 char dan kirim berurutan. */
+async function sendChunked(ctx, text) {
+  const MAX = 4000;
+  if (text.length <= MAX) {
+    await safeReply(ctx, text);
+    return;
+  }
+  const chunks = [];
+  let buf = '';
+  for (const part of text.split('\n')) {
+    if ((buf + '\n' + part).length > MAX) {
+      chunks.push(buf);
+      buf = part;
+    } else {
+      buf = buf ? `${buf}\n${part}` : part;
+    }
+  }
+  if (buf) chunks.push(buf);
+  for (const chunk of chunks) {
+    await safeReply(ctx, chunk);
+  }
+}
 
 /**
  * Kirim balasan dengan parse_mode Markdown. Kalau Telegram menolak
