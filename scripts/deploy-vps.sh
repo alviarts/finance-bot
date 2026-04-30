@@ -103,33 +103,39 @@ if ! command -v pm2 >/dev/null 2>&1; then
 fi
 green "✓ PM2: $(pm2 -v)"
 
-# Migrasi proses lama bernama "finance-bot" → "finance-bot-tg" (kalau ada).
-# Versi sebelumnya hanya menjalankan satu proses bernama "finance-bot".
+# pm2-logrotate: rotate log files supaya tidak menumpuk berbulan-bulan
+if ! pm2 list | grep -q 'pm2-logrotate'; then
+  yellow '→ Instal plugin pm2-logrotate'
+  pm2 install pm2-logrotate >/dev/null 2>&1 || true
+fi
+pm2 set pm2-logrotate:max_size 5M     >/dev/null 2>&1 || true
+pm2 set pm2-logrotate:retain 7        >/dev/null 2>&1 || true
+pm2 set pm2-logrotate:compress true   >/dev/null 2>&1 || true
+green '✓ Log rotation aktif (max 5MB per file, simpan 7 hari, di-gzip)'
+
+# Migrasi proses lama: hapus dulu sebelum start dari ecosystem.config.js
 if pm2 describe finance-bot >/dev/null 2>&1; then
-  yellow '→ Proses lama "finance-bot" terdeteksi, hapus (akan diganti finance-bot-tg)'
+  yellow '→ Proses lama "finance-bot" terdeteksi, hapus'
   pm2 delete finance-bot >/dev/null 2>&1 || true
 fi
-
-# Telegram (selalu start)
 if pm2 describe finance-bot-tg >/dev/null 2>&1; then
-  yellow '→ PM2: restart finance-bot-tg'
-  pm2 restart finance-bot-tg --update-env
-else
-  yellow '→ PM2: start finance-bot-tg'
-  pm2 start src/bot-tg.js --name finance-bot-tg
+  pm2 delete finance-bot-tg >/dev/null 2>&1 || true
+fi
+if pm2 describe finance-bot-wa >/dev/null 2>&1; then
+  pm2 delete finance-bot-wa >/dev/null 2>&1 || true
 fi
 
-# WhatsApp (opsional — start cuma kalau ENABLE_WA=1)
+# Pastikan folder logs ada (ecosystem.config.js tulis ke ./logs/)
+mkdir -p logs
+
+# Start lewat ecosystem.config.js — semua memory limits & autorestart udah
+# ditentukan di config. Kalau ENABLE_WA=0, hanya start finance-bot-tg.
 if [ "${ENABLE_WA:-1}" = "1" ]; then
-  if pm2 describe finance-bot-wa >/dev/null 2>&1; then
-    yellow '→ PM2: restart finance-bot-wa'
-    pm2 restart finance-bot-wa --update-env
-  else
-    yellow '→ PM2: start finance-bot-wa (cek log untuk QR code saat first run)'
-    pm2 start src/bot-wa.js --name finance-bot-wa
-  fi
+  yellow '→ PM2: start finance-bot-tg + finance-bot-wa (lihat ecosystem.config.js)'
+  pm2 start ecosystem.config.js
 else
-  yellow '→ Skip finance-bot-wa (ENABLE_WA != 1)'
+  yellow '→ PM2: start finance-bot-tg saja (ENABLE_WA=0)'
+  pm2 start ecosystem.config.js --only finance-bot-tg
 fi
 
 pm2 save
