@@ -147,9 +147,11 @@ function parseMessage(text) {
   // Ekstrak hint tanggal di akhir pesan (untuk backdated entry).
   const { date, rest: trimmed } = extractDateHint(text);
 
-  // ── Pengeluaran: "keluar/out/- item amount" ──────────────────────────────
+  // ── Pengeluaran: "<prefix> item amount" ─────────────────────────────────
+  // Prefix: keluar / out / pengeluaran / bayar / byr / beli / bli / belanja /
+  // blnj. Atau "- item amount" (mis. "- listrik 200rb").
   const expensePatterns = [
-    /^(?:keluar|out|pengeluaran)\s+(.+?)\s+([\d.]+\s*(?:k|rb|ribu|jt|juta)?)$/i,
+    /^(?:keluar|out|pengeluaran|bayar|byr|beli|bli|belanja|blnj)\s+(.+?)\s+([\d.]+\s*(?:k|rb|ribu|jt|juta)?)$/i,
     /^-\s*(.+?)\s+([\d.]+\s*(?:k|rb|ribu|jt|juta)?)$/i,
   ];
 
@@ -170,9 +172,12 @@ function parseMessage(text) {
     const item   = capitalizeFirst(incomeMatch[1].trim());
     const amount = parseAmount(incomeMatch[2]);
 
-    const expenseKeywords = ['keluar', 'out', 'pengeluaran'];
+    // Hindari double-classify: kalau item dimulai dengan prefix expense
+    // diikuti spasi, jangan dianggap income (sudah dicover di expensePatterns).
+    // Pakai " " setelah kata supaya "bayaran 5jt" / "belian 100k" tetap income.
+    const expenseKeywords = ['keluar', 'out', 'pengeluaran', 'bayar', 'byr', 'beli', 'bli', 'belanja', 'blnj'];
     const isExpenseKeyword = expenseKeywords.some(kw =>
-      incomeMatch[1].toLowerCase().startsWith(kw)
+      incomeMatch[1].toLowerCase().startsWith(kw + ' ')
     );
 
     if (!isExpenseKeyword && !isNaN(amount) && amount > 0) {

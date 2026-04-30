@@ -213,8 +213,11 @@ function getHelpText() {
     `  \`transfer 150k\`\n\n` +
     `*📤 Catat Pengeluaran:*\n` +
     `  \`keluar bensin 50000\`\n` +
-    `  \`keluar makan 25k\`\n` +
-    `  \`- listrik 200rb\`\n\n` +
+    `  \`bayar listrik 200rb\`\n` +
+    `  \`beli ayam 35k\`\n` +
+    `  \`belanja sayur 50k\`\n` +
+    `  \`- bensin 50000\`\n` +
+    `  _Prefix lain: byr, bli, blnj, out, pengeluaran_\n\n` +
     `*📅 Backdated (transaksi hari lain):*\n` +
     `  \`ayam 35000 kemarin\`\n` +
     `  \`gaji 5jt 2 hari lalu\`\n` +
