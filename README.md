@@ -1,7 +1,12 @@
-# 🤖 Telegram Finance Bot
+# 🤖 Telegram + WhatsApp Finance Bot
 
-Bot Telegram untuk mencatat keuangan pribadi secara otomatis ke Google Sheets.
+Bot Telegram **dan** WhatsApp untuk mencatat keuangan pribadi secara otomatis ke Google Sheets.
 Cukup kirim pesan seperti **`ayam 35000`** dan langsung tercatat!
+
+Kedua bot share file logika yang sama (`parser.js`, `sheets.js`, `commands.js`),
+jadi semua fitur (parser, kategori, saldo, hapus semua, multi-line, dll) tersedia
+di Telegram **dan** WhatsApp dengan perilaku identik. Sheet user Telegram dipisah
+dari WhatsApp lewat prefix `wa-` di nama tab (mis. `wa-628xxxx` vs `5939777525`).
 
 ---
 
@@ -170,7 +175,12 @@ Script akan:
 2. `npm install`.
 3. Tanya `TELEGRAM_BOT_TOKEN` & `SPREADSHEET_ID` → tulis ke `.env` (chmod 600).
 4. Minta paste isi service-account JSON → tulis ke `credentials.json` (chmod 600), validasi JSON.
-5. Instal & jalankan PM2 dengan nama proses `finance-bot`, lalu `pm2 save`.
+5. Instal & start dua proses PM2: `finance-bot-tg` (Telegram) + `finance-bot-wa` (WhatsApp), lalu `pm2 save`.
+
+Untuk **skip WhatsApp** (Telegram-only), set env var sebelum jalanin script:
+```bash
+ENABLE_WA=0 bash scripts/deploy-vps.sh
+```
 
 Setelah selesai, jalankan **sekali** perintah yang di-print PM2 untuk auto-startup saat reboot:
 
@@ -179,22 +189,35 @@ pm2 startup        # copy & jalankan baris `sudo env PATH=... pm2 ...` yang dia 
 pm2 save
 ```
 
+### 📱 Login WhatsApp (sekali aja per device)
+
+Setelah `finance-bot-wa` start, lihat log untuk QR code:
+
+```bash
+pm2 logs finance-bot-wa --lines 100
+```
+
+Buka WhatsApp di HP → **Settings → Linked Devices → Link a device** → scan QR code di terminal.
+
+Setelah login berhasil, sesi disimpan di folder `auth_info/` di VPS. Kalau VPS reboot, sesi ke-load otomatis (kecuali sesi corrupt). Kalau perlu login ulang, hapus folder `auth_info/` lalu restart `pm2 restart finance-bot-wa`.
+
 **Update bot setelah ada perubahan kode:**
 
 ```bash
 cd ~/finance-bot
 git pull
 npm install        # kalau dependency berubah
-pm2 restart finance-bot
+pm2 restart finance-bot-tg finance-bot-wa
 ```
 
 **Cek status:**
 
 ```bash
 pm2 status
-pm2 logs finance-bot     # tail logs
-pm2 stop finance-bot
-pm2 restart finance-bot
+pm2 logs finance-bot-tg     # log Telegram
+pm2 logs finance-bot-wa     # log WhatsApp (termasuk QR saat first run)
+pm2 stop finance-bot-tg
+pm2 restart finance-bot-tg
 ```
 
 ---
@@ -204,12 +227,14 @@ pm2 restart finance-bot
 ```
 finance-bot/
 ├── src/
-│   ├── bot.js          ← Entry point Telegram (jalankan ini)
-│   ├── parser.js       ← Parse pesan teks
-│   ├── sheets.js       ← Google Sheets API
-│   └── commands.js     ← Logic tiap command
+│   ├── bot-tg.js       ← Entry point Telegram (Telegraf, long-polling)
+│   ├── bot-wa.js       ← Entry point WhatsApp (Baileys, perlu QR scan sekali)
+│   ├── parser.js       ← Parse pesan teks (shared)
+│   ├── sheets.js       ← Google Sheets API (shared)
+│   └── commands.js     ← Logic tiap command (shared)
 ├── scripts/
 │   └── deploy-vps.sh   ← One-shot installer untuk VPS (Node + PM2 + .env + creds)
+├── auth_info/          ← Sesi WhatsApp (auto-generate setelah scan QR, gitignored)
 ├── credentials.json    ← Google service account key (kamu taruh di sini, gitignored)
 ├── .env                ← Konfigurasi (TELEGRAM_BOT_TOKEN, SPREADSHEET_ID, gitignored)
 ├── .env.example        ← Contoh .env

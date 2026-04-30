@@ -103,13 +103,35 @@ if ! command -v pm2 >/dev/null 2>&1; then
 fi
 green "✓ PM2: $(pm2 -v)"
 
+# Migrasi proses lama bernama "finance-bot" → "finance-bot-tg" (kalau ada).
+# Versi sebelumnya hanya menjalankan satu proses bernama "finance-bot".
 if pm2 describe finance-bot >/dev/null 2>&1; then
-  yellow '→ PM2: restart finance-bot'
-  pm2 restart finance-bot --update-env
-else
-  yellow '→ PM2: start finance-bot'
-  pm2 start src/bot.js --name finance-bot
+  yellow '→ Proses lama "finance-bot" terdeteksi, hapus (akan diganti finance-bot-tg)'
+  pm2 delete finance-bot >/dev/null 2>&1 || true
 fi
+
+# Telegram (selalu start)
+if pm2 describe finance-bot-tg >/dev/null 2>&1; then
+  yellow '→ PM2: restart finance-bot-tg'
+  pm2 restart finance-bot-tg --update-env
+else
+  yellow '→ PM2: start finance-bot-tg'
+  pm2 start src/bot-tg.js --name finance-bot-tg
+fi
+
+# WhatsApp (opsional — start cuma kalau ENABLE_WA=1)
+if [ "${ENABLE_WA:-1}" = "1" ]; then
+  if pm2 describe finance-bot-wa >/dev/null 2>&1; then
+    yellow '→ PM2: restart finance-bot-wa'
+    pm2 restart finance-bot-wa --update-env
+  else
+    yellow '→ PM2: start finance-bot-wa (cek log untuk QR code saat first run)'
+    pm2 start src/bot-wa.js --name finance-bot-wa
+  fi
+else
+  yellow '→ Skip finance-bot-wa (ENABLE_WA != 1)'
+fi
+
 pm2 save
 
 # ── 6. Auto-startup saat reboot ───────────────────────────────────────────────
@@ -122,7 +144,14 @@ bold ''
 bold '════════════════════════════════════════════════════════════════════'
 green '✅  Bot berhasil di-deploy. Cek status & logs:'
 echo  '       pm2 status'
-echo  '       pm2 logs finance-bot'
+echo  '       pm2 logs finance-bot-tg              # Telegram'
+echo  '       pm2 logs finance-bot-wa              # WhatsApp (lihat QR untuk login)'
+echo  ''
+yellow '📱 SCAN QR CODE untuk login WhatsApp (sekali aja per device):'
+echo  '       pm2 logs finance-bot-wa --lines 100'
+echo  '   QR code akan muncul di output log. Buka WhatsApp di HP →'
+echo  '   Settings → Linked Devices → Link a device → scan QR di terminal.'
+echo  '   Setelah scan, sesi disimpan di ./auth_info/ dan tidak perlu scan lagi.'
 echo  ''
 yellow '⚠️  Untuk auto-restart saat VPS reboot, jalankan:'
 echo  '       pm2 startup'
