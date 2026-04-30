@@ -3,7 +3,17 @@
  */
 
 const { parseMessage, formatCurrency } = require('./parser');
-const { appendTransaction, getTransactions, deleteLastTransaction } = require('./sheets');
+const {
+  appendTransaction,
+  getTransactions,
+  deleteLastTransaction,
+  deleteAllTransactions,
+} = require('./sheets');
+
+// In-memory tracking konfirmasi `hapus semua` per user. TTL 60 detik.
+// Map<userId, timestamp>
+const pendingHapusSemua = new Map();
+const HAPUS_SEMUA_TTL_MS = 60_000;
 
 /**
  * Escape karakter khusus Telegram Markdown (v1) supaya teks user-derived
@@ -82,8 +92,10 @@ async function handleCommand(userId, { command, period }) {
     case 'rekap':  return handleRekap(userId, period || 'bulan');
     case 'saldo':  return handleSaldo(userId);
     case 'daftar': return handleDaftar(userId);
-    case 'hapus':  return handleHapus(userId);
-    case 'help':   return getHelpText();
+    case 'hapus':           return handleHapus(userId);
+    case 'hapus_semua':     return handleHapusSemuaRequest(userId);
+    case 'ya_hapus_semua':  return handleHapusSemuaConfirm(userId);
+    case 'help':            return getHelpText();
     default:       return null;
   }
 }
@@ -201,6 +213,53 @@ async function handleHapus(userId) {
   );
 }
 
+// ── Hapus Semua (dengan konfirmasi 2-langkah) ────────────────────────
+
+function handleHapusSemuaRequest(userId) {
+  pendingHapusSemua.set(userId, Date.now());
+  return (
+    `⚠️ *Konfirmasi Hapus Semua*\n` +
+    `━━━━━━━━━━━━━━━━━━\n` +
+    `Ini akan menghapus *semua* transaksi kamu di sheet ini.\n` +
+    `Aksi ini *tidak bisa di-undo*.\n\n` +
+    `Untuk lanjut, balas:\n` +
+    `   \`ya hapus semua\`\n\n` +
+    `Konfirmasi berlaku selama *60 detik*. Setelah itu otomatis batal.`
+  );
+}
+
+async function handleHapusSemuaConfirm(userId) {
+  const ts = pendingHapusSemua.get(userId);
+  pendingHapusSemua.delete(userId);
+
+  if (!ts) {
+    return (
+      `🤔 Tidak ada permintaan hapus yang aktif.\n` +
+      `Ketik \`hapus semua\` dulu untuk memulai konfirmasi.`
+    );
+  }
+
+  if (Date.now() - ts > HAPUS_SEMUA_TTL_MS) {
+    return (
+      `⏱️ Konfirmasi sudah kedaluwarsa (lewat 60 detik).\n` +
+      `Ketik \`hapus semua\` lagi kalau masih mau hapus.`
+    );
+  }
+
+  const count = await deleteAllTransactions(userId);
+
+  if (count === 0) {
+    return `🧹 Tidak ada transaksi untuk dihapus. Sheet kamu memang sudah kosong.`;
+  }
+
+  return (
+    `🧹 *Semua transaksi terhapus!*\n` +
+    `━━━━━━━━━━━━━━━━━━\n` +
+    `Total dihapus: *${count} transaksi*.\n` +
+    `Header sheet tetap. Kamu bisa langsung mulai catat transaksi baru.`
+  );
+}
+
 // ── Help ─────────────────────────────────────────────────────────────────────
 
 function getHelpText() {
@@ -215,12 +274,16 @@ function getHelpText() {
     `  \`di tf 200k\`  /  \`ditf 200k\`\n` +
     `  _Prefix lain: dpt, trm, masuk, in, income_\n\n` +
     `*📤 Catat Pengeluaran:*\n` +
-    `  \`keluar bensin 50000\`\n` +
     `  \`bayar listrik 200rb\`\n` +
     `  \`beli ayam 35k\`\n` +
     `  \`belanja sayur 50k\`\n` +
-    `  \`- bensin 50000\`\n` +
-    `  _Prefix lain: byr, bli, blnj, out, pengeluaran_\n\n` +
+    `  \`kasih ojek 20k\`\n` +
+    `  \`traktir teman 100k\`\n` +
+    `  \`topup pulsa 50k\`\n` +
+    `  \`isi bensin 50k\`  /  \`isi ulang gas 25k\`\n` +
+    `  \`jajan kopi 25k\`\n` +
+    `  \`keluar bensin 50000\`  /  \`- bensin 50000\`\n` +
+    `  _Singkatan: byr, bli, blnj, ksh, trkt, tup, jjn_\n\n` +
     `*📅 Backdated (transaksi hari lain):*\n` +
     `  \`ayam 35000 kemarin\`\n` +
     `  \`gaji 5jt 2 hari lalu\`\n` +
@@ -233,7 +296,8 @@ function getHelpText() {
     `  \`saldo\` — total saldo semua waktu\n` +
     `  \`daftar\` — 10 transaksi terakhir\n\n` +
     `*🛠️ Lainnya:*\n` +
-    `  \`hapus\` — hapus transaksi terakhir\n` +
+    `  \`hapus\` — hapus transaksi terakhir (undo)\n` +
+    `  \`hapus semua\` — hapus *semua* transaksi (perlu konfirmasi)\n` +
     `  \`help\` — tampilkan panduan ini\n\n` +
     `*🏷️ Kategori auto-deteksi:* Makanan, Transportasi, Tagihan, Belanja, Kesehatan, Hiburan, Pendidikan, Pemasukan.`
   );

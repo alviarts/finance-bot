@@ -225,4 +225,37 @@ async function deleteLastTransaction(userId) {
   return lastRow;
 }
 
-module.exports = { ensureSheet, appendTransaction, getTransactions, deleteLastTransaction };
+/**
+ * Hapus SEMUA transaksi user (clear data rows, header tetap dipertahankan).
+ * Return: jumlah baris data yang dihapus (0 kalau memang sudah kosong).
+ */
+async function deleteAllTransactions(userId) {
+  const sheetName = await ensureSheet(userId);
+  const sheets    = await getSheetsClient();
+
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `'${sheetName}'!A:F`,
+  });
+
+  const rows = res.data.values || [];
+  const dataCount = Math.max(0, rows.length - 1); // exclude header
+  if (dataCount === 0) return 0;
+
+  // Clear isi range data (baris 2 ke bawah). Header (baris 1) tetap.
+  await sheets.spreadsheets.values.clear({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `'${sheetName}'!A2:F`,
+  });
+
+  console.log(`🧹 [${userId}] Hapus semua: ${dataCount} baris dibersihkan`);
+  return dataCount;
+}
+
+module.exports = {
+  ensureSheet,
+  appendTransaction,
+  getTransactions,
+  deleteLastTransaction,
+  deleteAllTransactions,
+};

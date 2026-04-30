@@ -142,6 +142,10 @@ function parseMessage(text) {
   if (lower === 'saldo')                                     return { type: 'command', command: 'saldo' };
   if (lower === 'daftar' || lower === 'list')                return { type: 'command', command: 'daftar' };
   if (lower === 'hapus' || lower === 'undo')                 return { type: 'command', command: 'hapus' };
+  if (lower === 'hapus semua' || lower === 'clear all' || lower === 'reset')
+                                                            return { type: 'command', command: 'hapus_semua' };
+  if (lower === 'ya hapus semua' || lower === 'yes hapus semua' || lower === 'ya, hapus semua')
+                                                            return { type: 'command', command: 'ya_hapus_semua' };
   if (lower === 'help' || lower === 'bantuan' || lower === '?') return { type: 'command', command: 'help' };
 
   // Ekstrak hint tanggal di akhir pesan (untuk backdated entry).
@@ -151,7 +155,7 @@ function parseMessage(text) {
   // Prefix: keluar / out / pengeluaran / bayar / byr / beli / bli / belanja /
   // blnj. Atau "- item amount" (mis. "- listrik 200rb").
   const expensePatterns = [
-    /^(?:keluar|out|pengeluaran|bayar|byr|beli|bli|belanja|blnj)\s+(.+?)\s+([\d.]+\s*(?:k|rb|ribu|jt|juta)?)$/i,
+    /^(?:keluar|out|pengeluaran|bayar|byr|beli|bli|belanja|blnj|kasih|ksh|traktir|traktirin|trkt|topup|top\s*up|tup|isi\s*ulang|isiulang|isi|jajan|jjn)\s+(.+?)\s+([\d.]+\s*(?:k|rb|ribu|jt|juta)?)$/i,
     /^-\s*(.+?)\s+([\d.]+\s*(?:k|rb|ribu|jt|juta)?)$/i,
   ];
 
@@ -200,7 +204,14 @@ function parseMessage(text) {
     // Hindari double-classify: kalau item dimulai dengan prefix expense
     // diikuti spasi, jangan dianggap income (sudah dicover di expensePatterns).
     // Pakai " " setelah kata supaya "bayaran 5jt" / "belian 100k" tetap income.
-    const expenseKeywords = ['keluar', 'out', 'pengeluaran', 'bayar', 'byr', 'beli', 'bli', 'belanja', 'blnj'];
+    const expenseKeywords = [
+      'keluar', 'out', 'pengeluaran',
+      'bayar', 'byr', 'beli', 'bli', 'belanja', 'blnj',
+      'kasih', 'ksh', 'traktir', 'traktirin', 'trkt',
+      'topup', 'top up', 'tup',
+      'isi ulang', 'isiulang', 'isi',
+      'jajan', 'jjn',
+    ];
     const isExpenseKeyword = expenseKeywords.some(kw =>
       incomeMatch[1].toLowerCase().startsWith(kw + ' ')
     );
